@@ -22,5 +22,10 @@ export default {
         file: 'Files',
         login: 'Login',
         filemanage: 'File Manage',
+    },
+    error: {
+        auth_failed_check_password: "Authentication failed. Please check your password and try again.",
+        generic_load_failed: "Failed to load files. Please try again later.",
+        delete_failed: "Failed to delete file. Please try again later.",
     }
 }

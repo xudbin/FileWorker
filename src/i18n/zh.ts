@@ -22,5 +22,10 @@ export default {
         file: '文件',
         login: '登录',
         filemanage: '文件管理',
+    },
+    error: {
+        auth_failed_check_password: "认证失败，请检查您的密码后重试。",
+        generic_load_failed: "加载文件失败，请稍后再试。",
+        delete_failed: "删除文件失败，请稍后再试。",
     }
 }

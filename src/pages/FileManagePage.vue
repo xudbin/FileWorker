@@ -1,10 +1,17 @@
 <script setup lang="ts">
 import { onBeforeMount, ref, type Ref, computed } from 'vue';
+import { useRouter } from 'vue-router';
+import { useI18n } from 'vue-i18n';
+import Cookies from 'js-cookie';
 import { formatBytes, formatDate } from '@/utils/utils';
+import { toast } from '@/utils/toast';
 import { DeleteFile, ListFiles } from '@/api';
 import type { _Object } from '@aws-sdk/client-s3';
+import axios from 'axios'; // Import axios to check for AxiosError
 
 const filesPerPage = 100; // Max items per request
+const router = useRouter();
+const { t } = useI18n();
 let uploadedFiles: Ref<_Object[]> = ref([]);
 const sortKey: Ref<'name' | 'lastModified'> = ref('name');
 const sortOrder: Ref<'asc' | 'desc'> = ref('asc');
@@ -45,7 +52,7 @@ const loadFilesChunk = async (isLoadMore = false) => {
 
     try {
         const res = await ListFiles(
-            filesPerPage.toString(), 
+            filesPerPage.toString(),
             undefined, // No prefix for now
             isLoadMore ? nextContinuationToken.value : undefined
         );
@@ -59,13 +66,20 @@ const loadFilesChunk = async (isLoadMore = false) => {
         } else if (!isLoadMore) {
             uploadedFiles.value = [];
         }
-        
+
         nextContinuationToken.value = res.NextContinuationToken;
 
     } catch (error) {
-        console.error("Error loading files:", error);
-        // Optionally, show a toast or error message to the user
-        if (!isLoadMore) {
+        if (axios.isAxiosError(error) && error.response && error.response.status === 401) {
+            toast(t("error.auth_failed_check_password"), 'error');
+            Cookies.remove('PASSWORD');
+            router.push('/login');
+        } else {
+            console.error("Error loading files:", error);
+            // Optionally, show a toast or error message to the user for other errors
+            toast(t("error.generic_load_failed"), 'error'); // Example for other errors
+        }
+        if (!isLoadMore) { // Reset state if initial load failed for any reason
             uploadedFiles.value = [];
             nextContinuationToken.value = undefined;
         }
@@ -88,10 +102,21 @@ const onDeleteFileClick = async (key?: string) => {
     if (!key) {
         return;
     }
-    await DeleteFile(key);
-    // After deletion, refresh the entire list from the beginning
-    // as pagination state might be inconsistent.
-    await refreshFiles(); 
+    try {
+        await DeleteFile(key);
+        // After deletion, refresh the entire list from the beginning
+        // as pagination state might be inconsistent.
+        await refreshFiles();
+    } catch (error) {
+        if (axios.isAxiosError(error) && error.response && error.response.status === 401) {
+            toast(t("error.auth_failed_check_password"), 'error');
+            Cookies.remove('PASSWORD');
+            router.push('/login');
+        } else {
+            console.error("Error deleting file:", error);
+            toast(t("error.delete_failed"), 'error'); // Assuming a generic delete failed message
+        }
+    }
 };
 
 const setSort = (newSortKey: 'name' | 'lastModified') => {

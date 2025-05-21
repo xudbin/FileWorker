@@ -4,13 +4,42 @@ import { ref, nextTick } from 'vue';
 import type { _Object } from '@aws-sdk/client-s3';
 
 // Mock API calls
+const mockListFiles = vi.fn();
+const mockDeleteFile = vi.fn();
 vi.mock('@/api', () => ({
-    ListFiles: vi.fn(),
-    DeleteFile: vi.fn(),
+    ListFiles: mockListFiles,
+    DeleteFile: mockDeleteFile,
 }));
 
-// Mock i18n
-const mockT = (key: string) => key;
+// Mock js-cookie
+const mockCookiesRemove = vi.fn();
+vi.mock('js-cookie', () => ({
+    default: { // Assuming Cookies is used as default export
+        remove: mockCookiesRemove,
+    },
+}));
+
+// Mock vue-router
+const mockRouterPush = vi.fn();
+vi.mock('vue-router', () => ({
+    useRouter: () => ({
+        push: mockRouterPush,
+    }),
+}));
+
+// Mock @/utils/toast
+const mockToast = vi.fn();
+vi.mock('@/utils/toast', () => ({
+    toast: mockToast,
+}));
+
+// Mock vue-i18n
+const mockT = (key: string) => key; // Simple mock for t function
+vi.mock('vue-i18n', () => ({
+    useI18n: () => ({
+        t: mockT,
+    }),
+}));
 
 const createMockFile = (key: string, lastModified: Date, size?: number): _Object => ({
     Key: key,
@@ -30,30 +59,49 @@ describe('FileManagePage.vue', () => {
         createMockFile("cherry.txt", new Date("2023-01-05T08:00:00Z")),
     ];
 
-    const setupComponent = async (files: _Object[] | null = mockFiles) => {
-        const { ListFiles } = await import('@/api');
-        (ListFiles as vi.Mock).mockResolvedValue({ Contents: files, IsTruncated: false, NextContinuationToken: undefined });
+    const setupComponent = async (initialListFilesMock?: () => Promise<any>) => {
+        if (initialListFilesMock) {
+            mockListFiles.mockImplementationOnce(initialListFilesMock);
+        } else {
+            // Default successful response for most tests
+            mockListFiles.mockResolvedValue({ Contents: mockFiles, IsTruncated: false, NextContinuationToken: undefined });
+        }
 
         wrapper = mount(FileManagePage, {
             global: {
-                mocks: {
-                    $t: mockT,
-                },
+                // No longer need to mock $t here as useI18n is mocked globally
                 stubs: {
                     // If there are child components that make network requests or are heavy, stub them
                     // e.g. 'ChildComponent': true
                 }
             }
         });
-        // Wait for onBeforeMount and initial refreshFiles to complete
-        await nextTick(); // For ListFiles call
+        // Wait for onBeforeMount and initial refreshFiles/loadFilesChunk to complete
+        await nextTick(); // For the ListFiles call within onBeforeMount
         await nextTick(); // For state updates from ListFiles
+        await nextTick(); // Additional tick for safety with async operations
     };
-
-    beforeEach(async () => {
-        // Reset mocks before each test if they are modified
+    
+    beforeEach(() => {
+        // Reset mocks before each test
         vi.clearAllMocks();
+        mockListFiles.mockReset();
+        mockDeleteFile.mockReset();
+        mockCookiesRemove.mockReset();
+        mockRouterPush.mockReset();
+        mockToast.mockReset();
     });
+
+    // Helper to create Axios-like errors
+    const createAxiosError = (status: number, message: string = 'Error') => {
+        return {
+            isAxiosError: true,
+            response: {
+                status: status,
+            },
+            message: message,
+        };
+    };
 
     it('should sort files by name ascending by default', async () => {
         await setupComponent();
@@ -177,5 +225,72 @@ describe('FileManagePage.vue', () => {
         await wrapper.vm.setSort('lastModified');
         expect(wrapper.vm.sortKey).toBe('lastModified');
         expect(wrapper.vm.sortOrder).toBe('desc');
+    });
+
+    describe('Error Handling', () => {
+        describe('loadFilesChunk', () => {
+            it('should handle 401 error by showing toast, removing cookie, and redirecting to login', async () => {
+                const error401 = createAxiosError(401, 'Unauthorized');
+                // Setup component without initial successful ListFiles call in onBeforeMount
+                // We need to prevent the default onBeforeMount ListFiles from succeeding or simplify setup.
+                // For this test, we let onBeforeMount call it, and it will be the one that fails.
+                await setupComponent(() => Promise.reject(error401));
+                
+                // Assertions (onBeforeMount calls refreshFiles -> loadFilesChunk)
+                expect(mockToast).toHaveBeenCalledWith(mockT("error.auth_failed_check_password"), 'error');
+                expect(mockCookiesRemove).toHaveBeenCalledWith('PASSWORD');
+                expect(mockRouterPush).toHaveBeenCalledWith('/login');
+                expect(wrapper.vm.uploadedFiles).toEqual([]); // Ensure files list is empty
+                expect(wrapper.vm.nextContinuationToken).toBeUndefined(); // Ensure token is cleared
+            });
+
+            it('should handle generic error by showing generic toast and not redirecting', async () => {
+                const genericError = createAxiosError(500, 'Server Error');
+                await setupComponent(() => Promise.reject(genericError));
+
+                expect(mockToast).toHaveBeenCalledWith(mockT("error.generic_load_failed"), 'error');
+                expect(mockCookiesRemove).not.toHaveBeenCalled();
+                expect(mockRouterPush).not.toHaveBeenCalled();
+                expect(wrapper.vm.uploadedFiles).toEqual([]);
+                expect(wrapper.vm.nextContinuationToken).toBeUndefined();
+            });
+        });
+
+        describe('onDeleteFileClick', () => {
+            beforeEach(async () => {
+                // Ensure component is set up with some files for deletion tests
+                // and ListFiles mock for refreshFiles is successful by default after delete.
+                await setupComponent(); 
+                mockListFiles.mockResolvedValue({ Contents: [], IsTruncated: false, NextContinuationToken: undefined }); // For refreshFiles
+            });
+
+            it('should handle 401 error by showing toast, removing cookie, and redirecting to login', async () => {
+                const error401 = createAxiosError(401, 'Unauthorized');
+                mockDeleteFile.mockRejectedValueOnce(error401);
+
+                await wrapper.vm.onDeleteFileClick('some-file-key');
+                await nextTick(); // Allow async operations in catch block to complete
+
+                expect(mockToast).toHaveBeenCalledWith(mockT("error.auth_failed_check_password"), 'error');
+                expect(mockCookiesRemove).toHaveBeenCalledWith('PASSWORD');
+                expect(mockRouterPush).toHaveBeenCalledWith('/login');
+                // refreshFiles should not be called if DeleteFile fails with 401 before it
+                expect(mockListFiles).toHaveBeenCalledTimes(1); // Once from setupComponent
+            });
+
+            it('should handle generic error by showing delete_failed toast and not redirecting', async () => {
+                const genericError = createAxiosError(500, 'Server Error');
+                mockDeleteFile.mockRejectedValueOnce(genericError);
+
+                await wrapper.vm.onDeleteFileClick('some-file-key');
+                await nextTick();
+
+                expect(mockToast).toHaveBeenCalledWith(mockT("error.delete_failed"), 'error');
+                expect(mockCookiesRemove).not.toHaveBeenCalled();
+                expect(mockRouterPush).not.toHaveBeenCalled();
+                 // refreshFiles should not be called if DeleteFile fails
+                expect(mockListFiles).toHaveBeenCalledTimes(1); // Once from setupComponent
+            });
+        });
     });
 });
