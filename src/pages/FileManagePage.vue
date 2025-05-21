@@ -120,7 +120,8 @@ const setSort = (newSortKey: 'name' | 'lastModified') => {
                 <button @click="setSort('lastModified')" class="px-3 py-1 border rounded" :class="{'bg-blue-500 text-white': sortKey === 'lastModified'}">
                     Sort by Date {{ sortKey === 'lastModified' ? (sortOrder === 'asc' ? '↑' : '↓') : '' }}
                 </button>
-            </div>
+                </div>
+            </div> <!-- This is the new closing tag -->
             <div v-for="file in sortedFiles" :key="file.Key"
                 class="w-full flex flex-row items-center mt-4 rounded border-1 border-gray-300 px-2 py-1">
                 <div class="w-10 h-10 i-mdi-file-document-outline"></div>
